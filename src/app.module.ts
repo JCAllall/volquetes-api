@@ -27,6 +27,9 @@ import { ReviewsModule } from './reviews/reviews.module';
         autoLoadEntities: true,
         synchronize: true,
         ssl: { rejectUnauthorized: false },
+        extra: {
+          family: 4,
+        },
       }),
       inject: [ConfigService],
     }),
