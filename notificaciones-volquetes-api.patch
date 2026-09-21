@@ -1,0 +1,548 @@
+diff --git a/src/app.module.ts b/src/app.module.ts
+index 83a78a0..da46789 100644
+--- a/src/app.module.ts
++++ b/src/app.module.ts
+@@ -11,6 +11,7 @@ import { ZonesModule } from './zones/zones.module';
+ import { OrdersModule } from './orders/orders.module';
+ import { PaymentsModule } from './payments/payments.module';
+ import { ReviewsModule } from './reviews/reviews.module';
++import { NotificationsModule } from './notifications/notifications.module';
+ 
+ @Module({
+   imports: [
+@@ -43,6 +44,7 @@ import { ReviewsModule } from './reviews/reviews.module';
+     OrdersModule,
+     PaymentsModule,
+     ReviewsModule,
++    NotificationsModule,
+   ],
+ })
+-export class AppModule {}
+\ No newline at end of file
++export class AppModule {}
+diff --git a/src/notifications/notification.entity.ts b/src/notifications/notification.entity.ts
+new file mode 100644
+index 0000000..09e1085
+--- /dev/null
++++ b/src/notifications/notification.entity.ts
+@@ -0,0 +1,50 @@
++import {
++  Entity,
++  PrimaryGeneratedColumn,
++  Column,
++  ManyToOne,
++  JoinColumn,
++  CreateDateColumn,
++} from 'typeorm';
++import { User } from '../users/user.entity';
++
++export enum NotificationType {
++  ORDER_STATUS = 'order_status',
++  PAYMENT = 'payment',
++  SYSTEM = 'system',
++}
++
++@Entity('notifications')
++export class Notification {
++  @PrimaryGeneratedColumn('uuid')
++  id: string;
++
++  @ManyToOne(() => User)
++  @JoinColumn({ name: 'user_id' })
++  user: User;
++
++  @Column()
++  user_id: string;
++
++  @Column({
++    type: 'enum',
++    enum: NotificationType,
++    default: NotificationType.SYSTEM,
++  })
++  type: NotificationType;
++
++  @Column()
++  title: string;
++
++  @Column()
++  message: string;
++
++  @Column({ nullable: true })
++  order_id: string;
++
++  @Column({ default: false })
++  read: boolean;
++
++  @CreateDateColumn()
++  created_at: Date;
++}
+diff --git a/src/notifications/notifications.controller.spec.ts b/src/notifications/notifications.controller.spec.ts
+new file mode 100644
+index 0000000..bda2fb9
+--- /dev/null
++++ b/src/notifications/notifications.controller.spec.ts
+@@ -0,0 +1,44 @@
++import { Test, TestingModule } from '@nestjs/testing';
++import {
++  NotificationsController,
++  AuthenticatedRequest,
++} from './notifications.controller';
++import { NotificationsService } from './notifications.service';
++
++describe('NotificationsController', () => {
++  let controller: NotificationsController;
++  const mockService = {
++    findByUser: jest.fn(),
++    unreadCount: jest.fn(),
++    markAllAsRead: jest.fn(),
++    markAsRead: jest.fn(),
++  };
++  const req = {
++    user: { id: 'u1', email: 'u1@test.com', role: 'constructor' },
++  } as unknown as AuthenticatedRequest;
++
++  beforeEach(async () => {
++    jest.clearAllMocks();
++    const module: TestingModule = await Test.createTestingModule({
++      controllers: [NotificationsController],
++      providers: [{ provide: NotificationsService, useValue: mockService }],
++    }).compile();
++
++    controller = module.get<NotificationsController>(NotificationsController);
++  });
++
++  it('should be defined', () => {
++    expect(controller).toBeDefined();
++  });
++
++  it('lists notifications for the authenticated user', async () => {
++    mockService.findByUser.mockResolvedValue([]);
++    await controller.findMine(req);
++    expect(mockService.findByUser).toHaveBeenCalledWith('u1');
++  });
++
++  it('marks a single notification as read for the authenticated user', async () => {
++    await controller.markAsRead('n1', req);
++    expect(mockService.markAsRead).toHaveBeenCalledWith('n1', 'u1');
++  });
++});
+diff --git a/src/notifications/notifications.controller.ts b/src/notifications/notifications.controller.ts
+new file mode 100644
+index 0000000..275e99d
+--- /dev/null
++++ b/src/notifications/notifications.controller.ts
+@@ -0,0 +1,34 @@
++import { Controller, Get, Patch, Param, UseGuards, Req } from '@nestjs/common';
++import { Request } from 'express';
++import { NotificationsService } from './notifications.service';
++import { JwtAuthGuard } from '../auth/jwt.guard';
++
++export interface AuthenticatedRequest extends Request {
++  user: { id: string; email: string; role: string };
++}
++
++@UseGuards(JwtAuthGuard)
++@Controller('notifications')
++export class NotificationsController {
++  constructor(private readonly notificationsService: NotificationsService) {}
++
++  @Get()
++  findMine(@Req() req: AuthenticatedRequest) {
++    return this.notificationsService.findByUser(req.user.id);
++  }
++
++  @Get('unread-count')
++  unreadCount(@Req() req: AuthenticatedRequest) {
++    return this.notificationsService.unreadCount(req.user.id);
++  }
++
++  @Patch('read-all')
++  markAllAsRead(@Req() req: AuthenticatedRequest) {
++    return this.notificationsService.markAllAsRead(req.user.id);
++  }
++
++  @Patch(':id/read')
++  markAsRead(@Param('id') id: string, @Req() req: AuthenticatedRequest) {
++    return this.notificationsService.markAsRead(id, req.user.id);
++  }
++}
+diff --git a/src/notifications/notifications.module.ts b/src/notifications/notifications.module.ts
+new file mode 100644
+index 0000000..96ec761
+--- /dev/null
++++ b/src/notifications/notifications.module.ts
+@@ -0,0 +1,13 @@
++import { Module } from '@nestjs/common';
++import { TypeOrmModule } from '@nestjs/typeorm';
++import { NotificationsService } from './notifications.service';
++import { NotificationsController } from './notifications.controller';
++import { Notification } from './notification.entity';
++
++@Module({
++  imports: [TypeOrmModule.forFeature([Notification])],
++  controllers: [NotificationsController],
++  providers: [NotificationsService],
++  exports: [NotificationsService],
++})
++export class NotificationsModule {}
+diff --git a/src/notifications/notifications.service.spec.ts b/src/notifications/notifications.service.spec.ts
+new file mode 100644
+index 0000000..c2d5c21
+--- /dev/null
++++ b/src/notifications/notifications.service.spec.ts
+@@ -0,0 +1,81 @@
++import { Test, TestingModule } from '@nestjs/testing';
++import { getRepositoryToken } from '@nestjs/typeorm';
++import { NotFoundException } from '@nestjs/common';
++import { NotificationsService } from './notifications.service';
++import { Notification, NotificationType } from './notification.entity';
++
++describe('NotificationsService', () => {
++  let service: NotificationsService;
++  const mockRepo = {
++    create: jest.fn(),
++    save: jest.fn(),
++    find: jest.fn(),
++    count: jest.fn(),
++    findOne: jest.fn(),
++    update: jest.fn(),
++  };
++
++  beforeEach(async () => {
++    jest.clearAllMocks();
++    const module: TestingModule = await Test.createTestingModule({
++      providers: [
++        NotificationsService,
++        { provide: getRepositoryToken(Notification), useValue: mockRepo },
++      ],
++    }).compile();
++
++    service = module.get<NotificationsService>(NotificationsService);
++  });
++
++  it('should be defined', () => {
++    expect(service).toBeDefined();
++  });
++
++  it('creates a notification with a default type', async () => {
++    const input = { user_id: 'u1', title: 't', message: 'm' };
++    mockRepo.create.mockReturnValue({
++      ...input,
++      type: NotificationType.SYSTEM,
++    });
++    mockRepo.save.mockResolvedValue({
++      id: 'n1',
++      ...input,
++      type: NotificationType.SYSTEM,
++    });
++
++    const result = await service.create(input);
++
++    expect(mockRepo.create).toHaveBeenCalledWith({
++      type: NotificationType.SYSTEM,
++      ...input,
++    });
++    expect(result.id).toBe('n1');
++  });
++
++  it('returns the unread count for a user', async () => {
++    mockRepo.count.mockResolvedValue(3);
++    const result = await service.unreadCount('u1');
++    expect(mockRepo.count).toHaveBeenCalledWith({
++      where: { user_id: 'u1', read: false },
++    });
++    expect(result).toEqual({ count: 3 });
++  });
++
++  it('throws when marking a missing notification as read', async () => {
++    mockRepo.findOne.mockResolvedValue(null);
++    await expect(service.markAsRead('n1', 'u1')).rejects.toThrow(
++      NotFoundException,
++    );
++  });
++
++  it('marks a notification as read', async () => {
++    const notification = { id: 'n1', user_id: 'u1', read: false };
++    mockRepo.findOne.mockResolvedValue(notification);
++    mockRepo.save.mockResolvedValue({ ...notification, read: true });
++
++    const result = await service.markAsRead('n1', 'u1');
++
++    expect(mockRepo.save).toHaveBeenCalledWith({ ...notification, read: true });
++    expect(result.read).toBe(true);
++  });
++});
+diff --git a/src/notifications/notifications.service.ts b/src/notifications/notifications.service.ts
+new file mode 100644
+index 0000000..bf4fed7
+--- /dev/null
++++ b/src/notifications/notifications.service.ts
+@@ -0,0 +1,62 @@
++import { Injectable, NotFoundException } from '@nestjs/common';
++import { InjectRepository } from '@nestjs/typeorm';
++import { Repository } from 'typeorm';
++import { Notification, NotificationType } from './notification.entity';
++
++export interface CreateNotificationInput {
++  user_id: string;
++  title: string;
++  message: string;
++  type?: NotificationType;
++  order_id?: string;
++}
++
++@Injectable()
++export class NotificationsService {
++  constructor(
++    @InjectRepository(Notification)
++    private notificationsRepository: Repository<Notification>,
++  ) {}
++
++  async create(data: CreateNotificationInput): Promise<Notification> {
++    const notification = this.notificationsRepository.create({
++      type: NotificationType.SYSTEM,
++      ...data,
++    });
++    return this.notificationsRepository.save(notification);
++  }
++
++  async findByUser(user_id: string): Promise<Notification[]> {
++    return this.notificationsRepository.find({
++      where: { user_id },
++      order: { created_at: 'DESC' },
++    });
++  }
++
++  async unreadCount(user_id: string): Promise<{ count: number }> {
++    const count = await this.notificationsRepository.count({
++      where: { user_id, read: false },
++    });
++    return { count };
++  }
++
++  async markAsRead(id: string, user_id: string): Promise<Notification> {
++    const notification = await this.notificationsRepository.findOne({
++      where: { id, user_id },
++    });
++    if (!notification)
++      throw new NotFoundException('Notificación no encontrada');
++    if (!notification.read) {
++      notification.read = true;
++      await this.notificationsRepository.save(notification);
++    }
++    return notification;
++  }
++
++  async markAllAsRead(user_id: string): Promise<void> {
++    await this.notificationsRepository.update(
++      { user_id, read: false },
++      { read: true },
++    );
++  }
++}
+diff --git a/src/orders/orders.controller.spec.ts b/src/orders/orders.controller.spec.ts
+index 3b018e7..84e7efe 100644
+--- a/src/orders/orders.controller.spec.ts
++++ b/src/orders/orders.controller.spec.ts
+@@ -1,12 +1,24 @@
+ import { Test, TestingModule } from '@nestjs/testing';
+ import { OrdersController } from './orders.controller';
++import { OrdersService } from './orders.service';
+ 
+ describe('OrdersController', () => {
+   let controller: OrdersController;
++  const mockOrdersService = {
++    create: jest.fn(),
++    findAll: jest.fn(),
++    findByUser: jest.fn(),
++    findByCompany: jest.fn(),
++    findOne: jest.fn(),
++    updateStatus: jest.fn(),
++    assignDriver: jest.fn(),
++  };
+ 
+   beforeEach(async () => {
++    jest.clearAllMocks();
+     const module: TestingModule = await Test.createTestingModule({
+       controllers: [OrdersController],
++      providers: [{ provide: OrdersService, useValue: mockOrdersService }],
+     }).compile();
+ 
+     controller = module.get<OrdersController>(OrdersController);
+diff --git a/src/orders/orders.module.ts b/src/orders/orders.module.ts
+index a7f284a..0911bda 100644
+--- a/src/orders/orders.module.ts
++++ b/src/orders/orders.module.ts
+@@ -3,11 +3,12 @@ import { TypeOrmModule } from '@nestjs/typeorm';
+ import { OrdersService } from './orders.service';
+ import { OrdersController } from './orders.controller';
+ import { Order } from './order.entity';
++import { NotificationsModule } from '../notifications/notifications.module';
+ 
+ @Module({
+-  imports: [TypeOrmModule.forFeature([Order])],
++  imports: [TypeOrmModule.forFeature([Order]), NotificationsModule],
+   controllers: [OrdersController],
+   providers: [OrdersService],
+   exports: [OrdersService],
+ })
+-export class OrdersModule {}
+\ No newline at end of file
++export class OrdersModule {}
+diff --git a/src/orders/orders.service.spec.ts b/src/orders/orders.service.spec.ts
+index 3d111a7..6416f77 100644
+--- a/src/orders/orders.service.spec.ts
++++ b/src/orders/orders.service.spec.ts
+@@ -1,12 +1,31 @@
+ import { Test, TestingModule } from '@nestjs/testing';
++import { getRepositoryToken } from '@nestjs/typeorm';
+ import { OrdersService } from './orders.service';
++import { Order, OrderStatus } from './order.entity';
++import { NotificationsService } from '../notifications/notifications.service';
++import { NotificationType } from '../notifications/notification.entity';
+ 
+ describe('OrdersService', () => {
+   let service: OrdersService;
++  const mockOrderRepo = {
++    create: jest.fn(),
++    save: jest.fn(),
++    find: jest.fn(),
++    findOne: jest.fn(),
++    update: jest.fn(),
++  };
++  const mockNotificationsService = {
++    create: jest.fn(),
++  };
+ 
+   beforeEach(async () => {
++    jest.clearAllMocks();
+     const module: TestingModule = await Test.createTestingModule({
+-      providers: [OrdersService],
++      providers: [
++        OrdersService,
++        { provide: getRepositoryToken(Order), useValue: mockOrderRepo },
++        { provide: NotificationsService, useValue: mockNotificationsService },
++      ],
+     }).compile();
+ 
+     service = module.get<OrdersService>(OrdersService);
+@@ -15,4 +34,49 @@ describe('OrdersService', () => {
+   it('should be defined', () => {
+     expect(service).toBeDefined();
+   });
++
++  it('notifies the customer when the status changes', async () => {
++    const order = {
++      id: 'o1',
++      user_id: 'u1',
++      status: OrderStatus.ACCEPTED,
++    };
++    mockOrderRepo.update.mockResolvedValue(undefined);
++    mockOrderRepo.findOne.mockResolvedValue(order);
++
++    const result = await service.updateStatus('o1', OrderStatus.ACCEPTED);
++
++    expect(mockOrderRepo.update).toHaveBeenCalledWith('o1', {
++      status: OrderStatus.ACCEPTED,
++    });
++    expect(mockNotificationsService.create).toHaveBeenCalledWith({
++      user_id: 'u1',
++      type: NotificationType.ORDER_STATUS,
++      title: 'Actualización de tu pedido',
++      message: 'Tu pedido fue aceptado por la empresa.',
++      order_id: 'o1',
++    });
++    expect(result).toBe(order);
++  });
++
++  it('notifies the customer when a driver is assigned', async () => {
++    const order = {
++      id: 'o1',
++      user_id: 'u1',
++      status: OrderStatus.ASSIGNED,
++    };
++    mockOrderRepo.update.mockResolvedValue(undefined);
++    mockOrderRepo.findOne.mockResolvedValue(order);
++
++    await service.assignDriver('o1', 'd1', 'v1');
++
++    expect(mockOrderRepo.update).toHaveBeenCalledWith('o1', {
++      driver_id: 'd1',
++      vehicle_id: 'v1',
++      status: OrderStatus.ASSIGNED,
++    });
++    expect(mockNotificationsService.create).toHaveBeenCalledWith(
++      expect.objectContaining({ user_id: 'u1', order_id: 'o1' }),
++    );
++  });
+ });
+diff --git a/src/orders/orders.service.ts b/src/orders/orders.service.ts
+index af3332e..e1bf0c0 100644
+--- a/src/orders/orders.service.ts
++++ b/src/orders/orders.service.ts
+@@ -2,12 +2,25 @@ import { Injectable, NotFoundException } from '@nestjs/common';
+ import { InjectRepository } from '@nestjs/typeorm';
+ import { Repository } from 'typeorm';
+ import { Order, OrderStatus } from './order.entity';
++import { NotificationsService } from '../notifications/notifications.service';
++import { NotificationType } from '../notifications/notification.entity';
++
++const STATUS_MESSAGES: Record<OrderStatus, string> = {
++  [OrderStatus.PENDING]: 'Tu pedido está pendiente de confirmación.',
++  [OrderStatus.ACCEPTED]: 'Tu pedido fue aceptado por la empresa.',
++  [OrderStatus.ASSIGNED]: 'Se asignó un chofer a tu pedido.',
++  [OrderStatus.DELIVERED]: 'Tu volquete fue entregado.',
++  [OrderStatus.PICKED_UP]: 'Tu volquete fue retirado.',
++  [OrderStatus.COMPLETED]: 'Tu pedido fue completado.',
++  [OrderStatus.CANCELLED]: 'Tu pedido fue cancelado.',
++};
+ 
+ @Injectable()
+ export class OrdersService {
+   constructor(
+     @InjectRepository(Order)
+     private ordersRepository: Repository<Order>,
++    private notificationsService: NotificationsService,
+   ) {}
+ 
+   async create(data: Partial<Order>): Promise<Order> {
+@@ -49,15 +62,34 @@ export class OrdersService {
+ 
+   async updateStatus(id: string, status: OrderStatus): Promise<Order> {
+     await this.ordersRepository.update(id, { status });
+-    return this.findOne(id);
++    const order = await this.findOne(id);
++    await this.notifyStatusChange(order);
++    return order;
+   }
+ 
+-  async assignDriver(id: string, driver_id: string, vehicle_id: string): Promise<Order> {
++  async assignDriver(
++    id: string,
++    driver_id: string,
++    vehicle_id: string,
++  ): Promise<Order> {
+     await this.ordersRepository.update(id, {
+       driver_id,
+       vehicle_id,
+       status: OrderStatus.ASSIGNED,
+     });
+-    return this.findOne(id);
++    const order = await this.findOne(id);
++    await this.notifyStatusChange(order);
++    return order;
++  }
++
++  private async notifyStatusChange(order: Order): Promise<void> {
++    await this.notificationsService.create({
++      user_id: order.user_id,
++      type: NotificationType.ORDER_STATUS,
++      title: 'Actualización de tu pedido',
++      message:
++        STATUS_MESSAGES[order.status] ?? 'El estado de tu pedido cambió.',
++      order_id: order.id,
++    });
+   }
+-}
+\ No newline at end of file
++}
