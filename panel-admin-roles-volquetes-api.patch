@@ -1,0 +1,192 @@
+diff --git a/src/auth/roles.decorator.ts b/src/auth/roles.decorator.ts
+new file mode 100644
+index 0000000..e038e16
+--- /dev/null
++++ b/src/auth/roles.decorator.ts
+@@ -0,0 +1,4 @@
++import { SetMetadata } from '@nestjs/common';
++
++export const ROLES_KEY = 'roles';
++export const Roles = (...roles: string[]) => SetMetadata(ROLES_KEY, roles);
+diff --git a/src/auth/roles.guard.spec.ts b/src/auth/roles.guard.spec.ts
+new file mode 100644
+index 0000000..7c61e5f
+--- /dev/null
++++ b/src/auth/roles.guard.spec.ts
+@@ -0,0 +1,48 @@
++import { ExecutionContext, ForbiddenException } from '@nestjs/common';
++import { Reflector } from '@nestjs/core';
++import { RolesGuard } from './roles.guard';
++
++describe('RolesGuard', () => {
++  let guard: RolesGuard;
++  let reflector: Reflector;
++
++  const buildContext = (role?: string): ExecutionContext =>
++    ({
++      getHandler: () => (() => undefined) as unknown as () => void,
++      getClass: () => class {},
++      switchToHttp: () => ({
++        getRequest: () => ({
++          user: role ? { id: 'u1', email: 'a@a.com', role } : undefined,
++        }),
++      }),
++    }) as unknown as ExecutionContext;
++
++  beforeEach(() => {
++    reflector = new Reflector();
++    guard = new RolesGuard(reflector);
++  });
++
++  it('allows access when no roles are required', () => {
++    jest.spyOn(reflector, 'getAllAndOverride').mockReturnValue(undefined);
++    expect(guard.canActivate(buildContext('company'))).toBe(true);
++  });
++
++  it('allows access when the user has one of the required roles', () => {
++    jest.spyOn(reflector, 'getAllAndOverride').mockReturnValue(['admin']);
++    expect(guard.canActivate(buildContext('admin'))).toBe(true);
++  });
++
++  it('denies access when the user role is not included', () => {
++    jest.spyOn(reflector, 'getAllAndOverride').mockReturnValue(['admin']);
++    expect(() => guard.canActivate(buildContext('company'))).toThrow(
++      ForbiddenException,
++    );
++  });
++
++  it('denies access when there is no user on the request', () => {
++    jest.spyOn(reflector, 'getAllAndOverride').mockReturnValue(['admin']);
++    expect(() => guard.canActivate(buildContext(undefined))).toThrow(
++      ForbiddenException,
++    );
++  });
++});
+diff --git a/src/auth/roles.guard.ts b/src/auth/roles.guard.ts
+new file mode 100644
+index 0000000..720c88e
+--- /dev/null
++++ b/src/auth/roles.guard.ts
+@@ -0,0 +1,37 @@
++import {
++  Injectable,
++  CanActivate,
++  ExecutionContext,
++  ForbiddenException,
++} from '@nestjs/common';
++import { Reflector } from '@nestjs/core';
++import { ROLES_KEY } from './roles.decorator';
++
++interface RequestWithUser {
++  user?: { id: string; email: string; role: string };
++}
++
++@Injectable()
++export class RolesGuard implements CanActivate {
++  constructor(private reflector: Reflector) {}
++
++  canActivate(context: ExecutionContext): boolean {
++    const requiredRoles = this.reflector.getAllAndOverride<string[]>(
++      ROLES_KEY,
++      [context.getHandler(), context.getClass()],
++    );
++
++    if (!requiredRoles || requiredRoles.length === 0) return true;
++
++    const request = context.switchToHttp().getRequest<RequestWithUser>();
++    const role = request.user?.role;
++
++    if (!role || !requiredRoles.includes(role)) {
++      throw new ForbiddenException(
++        'No tenés permisos para acceder a este recurso',
++      );
++    }
++
++    return true;
++  }
++}
+diff --git a/src/companies/companies.controller.ts b/src/companies/companies.controller.ts
+index c1c4742..b1f0928 100644
+--- a/src/companies/companies.controller.ts
++++ b/src/companies/companies.controller.ts
+@@ -1,6 +1,16 @@
+-import { Controller, Get, Post, Body, Param, Patch, UseGuards } from '@nestjs/common';
++import {
++  Controller,
++  Get,
++  Post,
++  Body,
++  Param,
++  Patch,
++  UseGuards,
++} from '@nestjs/common';
+ import { CompaniesService } from './companies.service';
+ import { JwtAuthGuard } from '../auth/jwt.guard';
++import { RolesGuard } from '../auth/roles.guard';
++import { Roles } from '../auth/roles.decorator';
+ 
+ @Controller('companies')
+ export class CompaniesController {
+@@ -11,7 +21,8 @@ export class CompaniesController {
+     return this.companiesService.create(body);
+   }
+ 
+-  @UseGuards(JwtAuthGuard)
++  @UseGuards(JwtAuthGuard, RolesGuard)
++  @Roles('admin')
+   @Get()
+   findAll() {
+     return this.companiesService.findAll();
+@@ -22,9 +33,10 @@ export class CompaniesController {
+     return this.companiesService.findApproved();
+   }
+ 
+-  @UseGuards(JwtAuthGuard)
++  @UseGuards(JwtAuthGuard, RolesGuard)
++  @Roles('admin')
+   @Patch(':id/approve')
+   approve(@Param('id') id: string) {
+     return this.companiesService.approve(id);
+   }
+-}
+\ No newline at end of file
++}
+diff --git a/src/users/users.controller.ts b/src/users/users.controller.ts
+index 2fc9eb8..6d25078 100644
+--- a/src/users/users.controller.ts
++++ b/src/users/users.controller.ts
+@@ -1,19 +1,30 @@
+ import { Controller, Get, Post, Body, UseGuards } from '@nestjs/common';
+ import { UsersService } from './users.service';
+ import { JwtAuthGuard } from '../auth/jwt.guard';
++import { RolesGuard } from '../auth/roles.guard';
++import { Roles } from '../auth/roles.decorator';
+ 
+ @Controller('users')
+ export class UsersController {
+   constructor(private readonly usersService: UsersService) {}
+ 
+   @Post()
+-  create(@Body() body: { name: string; email: string; password: string; phone?: string }) {
++  create(
++    @Body()
++    body: {
++      name: string;
++      email: string;
++      password: string;
++      phone?: string;
++    },
++  ) {
+     return this.usersService.create(body);
+   }
+ 
+-  @UseGuards(JwtAuthGuard)
++  @UseGuards(JwtAuthGuard, RolesGuard)
++  @Roles('admin')
+   @Get()
+   findAll() {
+     return this.usersService.findAll();
+   }
+-}
+\ No newline at end of file
++}
