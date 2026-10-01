@@ -28,6 +28,12 @@ export class User {
   @Column({ default: 'constructor' })
   role: string;
 
+  @Column({ nullable: true })
+  reset_password_token: string | null;
+
+  @Column({ type: 'timestamptz', nullable: true })
+  reset_password_expires: Date | null;
+
   @CreateDateColumn()
   created_at: Date;
 }
