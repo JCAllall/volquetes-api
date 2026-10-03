@@ -28,7 +28,7 @@ export class User {
   @Column({ default: 'constructor' })
   role: string;
 
-  @Column({ nullable: true })
+  @Column({ type: 'varchar', nullable: true })
   reset_password_token: string | null;
 
   @Column({ type: 'timestamptz', nullable: true })
